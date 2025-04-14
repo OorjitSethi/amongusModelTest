@@ -94,8 +94,8 @@ export class CharacterControls {
             
             if (keysPressed[W]) this.moveDirection.z -= 1
             if (keysPressed[S]) this.moveDirection.z += 1
-            if (keysPressed[A]) this.moveDirection.x -= 1
-            if (keysPressed[D]) this.moveDirection.x += 1
+            if (keysPressed[A]) this.moveDirection.x += 1
+            if (keysPressed[D]) this.moveDirection.x -= 1
             
             // Get camera direction
             const cameraDirection = new THREE.Vector3()
