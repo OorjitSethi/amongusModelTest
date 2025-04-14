@@ -9,7 +9,7 @@ scene.background = new THREE.Color(0xa8def0);
 
 // CAMERA
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 1.8, 0); // Position at origin with eye height
+camera.position.set(0, 1.65, 0); // Position at eye height
 
 // RENDERER
 const renderer = new THREE.WebGLRenderer({ antialias: true });

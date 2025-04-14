@@ -18,7 +18,8 @@ export class CharacterControls {
     runSpeed: number = 5.0
     
     // Camera settings
-    cameraHeight: number = 1.8 // Eye height for first person
+    cameraHeight: number = 1.65 // Eye height for first person
+    cameraForwardOffset: number = 0.25 // Forward offset to place camera at eyes
     
     // Movement vectors
     moveDirection = new THREE.Vector3()
@@ -64,8 +65,19 @@ export class CharacterControls {
         // Position the controls object at character position with eye height
         if (this.controls && this.model) {
             const controlsObject = this.controls.getObject()
-            controlsObject.position.x = this.model.position.x
-            controlsObject.position.z = this.model.position.z
+            
+            // Get camera direction for forward offset
+            const cameraDirection = new THREE.Vector3()
+            this.camera.getWorldDirection(cameraDirection)
+            cameraDirection.y = 0
+            cameraDirection.normalize()
+            
+            // Calculate forward offset
+            const forwardOffset = cameraDirection.clone().multiplyScalar(this.cameraForwardOffset)
+            
+            // Apply position with height and forward offset
+            controlsObject.position.x = this.model.position.x + forwardOffset.x
+            controlsObject.position.z = this.model.position.z + forwardOffset.z
             controlsObject.position.y = this.model.position.y + this.cameraHeight
         }
     }
@@ -124,8 +136,16 @@ export class CharacterControls {
                 controlsObject.position.add(moveVector)
                 
                 // Move the model to follow the camera (at foot level)
-                this.model.position.x = controlsObject.position.x
-                this.model.position.z = controlsObject.position.z
+                const cameraDir = new THREE.Vector3()
+                this.camera.getWorldDirection(cameraDir)
+                cameraDir.y = 0
+                cameraDir.normalize()
+                
+                // Calculate and remove the forward offset to position model
+                const forwardOffset = cameraDir.clone().multiplyScalar(this.cameraForwardOffset)
+                
+                this.model.position.x = controlsObject.position.x - forwardOffset.x
+                this.model.position.z = controlsObject.position.z - forwardOffset.z
                 this.model.position.y = controlsObject.position.y - this.cameraHeight
             }
             
@@ -142,15 +162,21 @@ export class CharacterControls {
         } else {
             // If controls are not locked, position model under camera
             const controlsObject = this.controls.getObject()
-            this.model.position.x = controlsObject.position.x
-            this.model.position.z = controlsObject.position.z 
-            this.model.position.y = controlsObject.position.y - this.cameraHeight
             
-            // Make the character face the camera direction even when not moving
+            // Calculate forward offset
             const cameraDirection = new THREE.Vector3()
             this.camera.getWorldDirection(cameraDirection)
             cameraDirection.y = 0
             cameraDirection.normalize()
+            
+            const forwardOffset = cameraDirection.clone().multiplyScalar(this.cameraForwardOffset)
+            
+            // Position model considering forward offset
+            this.model.position.x = controlsObject.position.x - forwardOffset.x
+            this.model.position.z = controlsObject.position.z - forwardOffset.z
+            this.model.position.y = controlsObject.position.y - this.cameraHeight
+            
+            // Make the character face the camera direction
             const cameraAngle = Math.atan2(cameraDirection.x, cameraDirection.z)
             this.model.rotation.y = cameraAngle + Math.PI
         }
