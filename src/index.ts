@@ -1,43 +1,121 @@
-import { KeyDisplay } from './utils';
 import { CharacterControls } from './characterControls';
 import * as THREE from 'three'
-import { CameraHelper } from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 
 // SCENE
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa8def0);
 
 // CAMERA
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.y = 5;
-camera.position.z = 5;
-camera.position.x = 0;
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 1.8, 0); // Position at origin with eye height
 
 // RENDERER
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
-renderer.shadowMap.enabled = true
+renderer.shadowMap.enabled = true;
 
-// CONTROLS
-const orbitControls = new OrbitControls(camera, renderer.domElement);
-orbitControls.enableDamping = true
-orbitControls.minDistance = 5
-orbitControls.maxDistance = 15
-orbitControls.enablePan = false
-orbitControls.maxPolarAngle = Math.PI / 2 - 0.05
-orbitControls.update();
+// Create controls for first-person camera using Three.js PointerLockControls
+const controls = new PointerLockControls(camera, document.body);
+scene.add(controls.getObject());
+
+// Input handling for player movement
+const keysPressed: { [key: string]: boolean } = {};
+
+// Add instructions to start the game
+const instructionsElement = document.createElement('div');
+instructionsElement.id = 'instructions';
+instructionsElement.style.position = 'absolute';
+instructionsElement.style.width = '100%';
+instructionsElement.style.height = '100%';
+instructionsElement.style.display = 'flex';
+instructionsElement.style.flexDirection = 'column';
+instructionsElement.style.justifyContent = 'center';
+instructionsElement.style.alignItems = 'center';
+instructionsElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+instructionsElement.style.color = '#ffffff';
+instructionsElement.style.fontFamily = 'Arial, sans-serif';
+instructionsElement.style.zIndex = '1000';
+instructionsElement.style.cursor = 'pointer';
+instructionsElement.innerHTML = `
+    <h1 style="margin-bottom: 20px;">Character Controls Demo</h1>
+    <div style="text-align: center; font-size: 1.2em; line-height: 1.5;">
+        <p>Click to look around and play</p>
+        <p>WASD to move</p>
+        <p>Shift to run</p>
+        <p>ESC to pause and release mouse</p>
+    </div>
+`;
+document.body.appendChild(instructionsElement);
+
+// Click instructions to start game
+instructionsElement.addEventListener('click', function() {
+    try {
+        controls.lock();
+    } catch (e) {
+        console.error("Error locking pointer:", e);
+    }
+});
+
+// Show instructions when pointer is unlocked
+controls.addEventListener('unlock', function() {
+    instructionsElement.style.display = 'flex';
+});
+
+// Hide instructions when pointer is locked
+controls.addEventListener('lock', function() {
+    instructionsElement.style.display = 'none';
+});
+
+// Handle pointer lock events
+document.addEventListener('pointerlockchange', function() {
+    if (document.pointerLockElement === document.body) {
+        console.log("Pointer lock activated");
+    } else {
+        console.log("Pointer lock deactivated");
+    }
+}, false);
+
+document.addEventListener('pointerlockerror', function(e) {
+    console.error("Pointer lock error:", e);
+    alert("There was an error with the pointer lock. Click again to try again.");
+}, false);
+
+// Keyboard event listeners for player movement
+document.addEventListener('keydown', (event) => {
+    keysPressed[event.key.toLowerCase()] = true;
+    
+    // Toggle run with shift
+    if (event.key === 'Shift' && characterControls) {
+        characterControls.switchRunToggle();
+    }
+});
+
+document.addEventListener('keyup', (event) => {
+    keysPressed[event.key.toLowerCase()] = false;
+});
 
 // LIGHTS
-light()
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+directionalLight.position.set(0, 20, 10);
+directionalLight.castShadow = true;
+scene.add(directionalLight);
 
 // FLOOR
-generateFloor()
+const floorGeometry = new THREE.PlaneGeometry(80, 80);
+const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
 
 // MODEL WITH ANIMATIONS
-var characterControls: CharacterControls
+var characterControls: CharacterControls;
 new GLTFLoader().load('models/Soldier.glb', function (gltf) {
     const model = gltf.scene;
     model.traverse(function (object: any) {
@@ -47,41 +125,28 @@ new GLTFLoader().load('models/Soldier.glb', function (gltf) {
 
     const gltfAnimations: THREE.AnimationClip[] = gltf.animations;
     const mixer = new THREE.AnimationMixer(model);
-    const animationsMap: Map<string, THREE.AnimationAction> = new Map()
+    const animationsMap: Map<string, THREE.AnimationAction> = new Map();
     gltfAnimations.filter(a => a.name != 'TPose').forEach((a: THREE.AnimationClip) => {
-        animationsMap.set(a.name, mixer.clipAction(a))
-    })
+        animationsMap.set(a.name, mixer.clipAction(a));
+    });
 
-    characterControls = new CharacterControls(model, mixer, animationsMap, orbitControls, camera,  'Idle')
+    characterControls = new CharacterControls(model, mixer, animationsMap, camera, controls, 'Idle');
 });
 
-// CONTROL KEYS
-const keysPressed = {  }
-const keyDisplayQueue = new KeyDisplay();
-document.addEventListener('keydown', (event) => {
-    keyDisplayQueue.down(event.key)
-    if (event.shiftKey && characterControls) {
-        characterControls.switchRunToggle()
-    } else {
-        (keysPressed as any)[event.key.toLowerCase()] = true
-    }
-}, false);
-document.addEventListener('keyup', (event) => {
-    keyDisplayQueue.up(event.key);
-    (keysPressed as any)[event.key.toLowerCase()] = false
-}, false);
-
 const clock = new THREE.Clock();
+
 // ANIMATE
 function animate() {
-    let mixerUpdateDelta = clock.getDelta();
+    const delta = clock.getDelta();
+    
     if (characterControls) {
-        characterControls.update(mixerUpdateDelta, keysPressed);
+        characterControls.update(delta, keysPressed);
     }
-    orbitControls.update()
+    
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
 }
+
 document.body.appendChild(renderer.domElement);
 animate();
 
@@ -90,9 +155,8 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    keyDisplayQueue.updatePosition()
 }
-window.addEventListener('resize', onWindowResize);
+window.addEventListener('resize', onWindowResize, false);
 
 function generateFloor() {
     // TEXTURES
