@@ -33,6 +33,12 @@ export class CharacterControls {
     moveDirection = new THREE.Vector3()
     modelPosition = new THREE.Vector3()
     lastValidPosition = new THREE.Vector3()
+    
+    // Debug flags
+    debugMode: boolean = false // Set to false to disable debugging
+    
+    // Ghost object
+    ghostInitialized: boolean = false
 
     constructor(
         model: THREE.Group,
@@ -76,6 +82,29 @@ export class CharacterControls {
         
         // Initialize character position and camera
         this.updateControlsPosition()
+        
+        console.log(`Character initialized at position (${this.model.position.x}, ${this.model.position.y}, ${this.model.position.z})`);
+        
+        // Initialize physics ghost object for collision detection if physics is available
+        if (this.physicsManager && this.physicsManager.isPhysicsInitialized()) {
+            this.initCharacterGhostObject();
+        }
+    }
+    
+    /**
+     * Initialize the character's ghost object for physics-based collision detection
+     */
+    private initCharacterGhostObject(): void {
+        if (this.physicsManager && this.physicsManager.isPhysicsInitialized()) {
+            console.log(`Initializing character ghost object at ${this.model.position.toArray()}`);
+            this.physicsManager.createCharacterGhostObject(
+                this.model.position,
+                this.collisionRadius,
+                this.characterHeight
+            );
+            this.ghostInitialized = true;
+            console.log("Character ghost object initialized for collision detection");
+        }
     }
     
     /**
@@ -90,6 +119,11 @@ export class CharacterControls {
      */
     public setPhysicsManager(physicsManager: PhysicsManager): void {
         this.physicsManager = physicsManager
+        
+        // Initialize ghost object if not already done
+        if (physicsManager && physicsManager.isPhysicsInitialized() && !this.ghostInitialized) {
+            this.initCharacterGhostObject();
+        }
     }
     
     private updateControlsPosition() {
@@ -123,15 +157,18 @@ export class CharacterControls {
     private checkCollision(position: THREE.Vector3): boolean {
         // Only use physics-based collision detection
         if (this.physicsManager && this.physicsManager.isPhysicsInitialized()) {
+            // Use the ghost object-based collision detection
             const collision = this.physicsManager.checkCharacterCollision(
                 position, 
                 this.collisionRadius,
                 this.characterHeight
             );
+            
             if (collision) {
-                console.log(`Physics collision detected at position (${position.x}, ${position.y}, ${position.z})`);
-                return true;
+                console.log(`***COLLISION DETECTED*** at position (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
             }
+            
+            return collision;
         } else {
             console.warn("Physics system not initialized - character will have no collisions");
         }
@@ -204,11 +241,14 @@ export class CharacterControls {
                     newControlsPosition.z - forwardOffset.z
                 )
                 
-                // Check for collision
+                // Check for collision BEFORE moving
                 const wouldCollide = this.checkCollision(newModelPosition)
                 
                 if (!wouldCollide) {
                     // No collision, move normally
+                    // Output position update for debugging
+                    console.log(`Moving to (${newModelPosition.x.toFixed(2)}, ${newModelPosition.y.toFixed(2)}, ${newModelPosition.z.toFixed(2)})`);
+                    
                     controlsObject.position.copy(newControlsPosition)
                     
                     // Update model position
@@ -217,6 +257,7 @@ export class CharacterControls {
                     this.model.position.y = controlsObject.position.y - this.cameraHeight
                 } else {
                     // Try to slide along walls by moving in separate X and Z directions
+                    console.log(`Collision detected - attempting to slide`);
                     
                     // Try X movement only
                     const newPositionX = new THREE.Vector3(
@@ -225,8 +266,10 @@ export class CharacterControls {
                         this.model.position.z
                     )
                     
-                    if (!this.checkCollision(newPositionX)) {
+                    const collideX = this.checkCollision(newPositionX)
+                    if (!collideX) {
                         // Can move in X direction
+                        console.log(`Can slide in X direction`);
                         this.model.position.x = newPositionX.x
                         controlsObject.position.x = newPositionX.x + forwardOffset.x
                     }
@@ -238,10 +281,16 @@ export class CharacterControls {
                         newModelPosition.z
                     )
                     
-                    if (!this.checkCollision(newPositionZ)) {
+                    const collideZ = this.checkCollision(newPositionZ)
+                    if (!collideZ) {
                         // Can move in Z direction
+                        console.log(`Can slide in Z direction`);
                         this.model.position.z = newPositionZ.z
                         controlsObject.position.z = newPositionZ.z + forwardOffset.z
+                    }
+                    
+                    if (collideX && collideZ) {
+                        console.log(`Cannot move in any direction - staying at current position`);
                     }
                 }
             }

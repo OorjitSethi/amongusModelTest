@@ -8,6 +8,10 @@ export class PhysicsManager {
     private meshes: Map<any, THREE.Object3D> = new Map()
     private ammo: any = null
     
+    // Ghost object for character collision detection
+    private characterGhostObject: any = null
+    private ghostTransform: any = null
+    
     // Physics configuration
     private gravityConstant: number = -9.8
     private collisionMargin: number = 0.05
@@ -65,10 +69,163 @@ export class PhysicsManager {
             // Create reusable temp transform
             this.tempTransform = new this.ammo.btTransform()
             
+            // Create a transform for the ghost object
+            this.ghostTransform = new this.ammo.btTransform()
+            
             this.isInitialized = true
             console.log('Ammo.js physics initialized successfully')
         } catch (error) {
             console.error('Failed to initialize Ammo.js:', error)
+        }
+    }
+    
+    /**
+     * Create a character collision ghost object
+     * @param position Initial position
+     * @param radius Character radius
+     * @param height Character height
+     */
+    public createCharacterGhostObject(position: THREE.Vector3, radius: number, height: number): void {
+        if (!this.isInitialized || !this.ammo) {
+            console.warn('Physics not initialized, cannot create ghost object');
+            return;
+        }
+        
+        try {
+            // Clean up existing ghost object if any
+            if (this.characterGhostObject) {
+                this.physicsWorld.removeCollisionObject(this.characterGhostObject);
+                // Note: In a real implementation, you'd need to properly dispose Ammo.js objects
+            }
+            
+            console.log(`Creating ghost object at position (${position.x}, ${position.y}, ${position.z}) with radius ${radius} and height ${height}`);
+            
+            // Create a capsule shape for the character
+            // Note: The height parameter is the total height between the two sphere centers
+            const capsuleHeight = Math.max(0.1, height - 2 * radius);
+            const capsuleShape = new this.ammo.btCapsuleShape(radius, capsuleHeight);
+            capsuleShape.setMargin(this.collisionMargin);
+            
+            // Set up the ghost object transform
+            this.ghostTransform.setIdentity();
+            this.ghostTransform.setOrigin(new this.ammo.btVector3(
+                position.x, 
+                position.y + height * 0.5, // Center the capsule vertically
+                position.z
+            ));
+            
+            // Create the ghost object
+            this.characterGhostObject = new this.ammo.btPairCachingGhostObject();
+            this.characterGhostObject.setCollisionShape(capsuleShape);
+            this.characterGhostObject.setWorldTransform(this.ghostTransform);
+            
+            // Important: Don't set CF_NO_CONTACT_RESPONSE or it won't detect static objects
+            // Just set as a sensor object that reports collisions but doesn't respond physically
+            
+            // Add to physics world - use specific collision groups
+            // 2 = character group, -1 = collide with everything except floors (which are in group 1)
+            this.physicsWorld.addCollisionObject(this.characterGhostObject, 2, -1);
+            
+            console.log(`Created character ghost object at (${position.x}, ${position.y}, ${position.z}) with radius ${radius} and height ${height}`);
+            
+            // Add a debug sphere to visualize the ghost object
+            this.createGhostDebugVisualization(position, radius, height);
+        } catch (error) {
+            console.error('Failed to create character ghost object:', error);
+        }
+    }
+    
+    /**
+     * Create a visual debug representation of the ghost object
+     */
+    private createGhostDebugVisualization(position: THREE.Vector3, radius: number, height: number): void {
+        // This function requires access to the scene, so it's left as a no-op
+        // In a real implementation, you'd add a wireframe capsule to visualize the ghost
+        console.log("Ghost object debug visualization would be created here");
+    }
+    
+    /**
+     * Update the character ghost object position
+     * @param position New position
+     */
+    public updateCharacterGhostPosition(position: THREE.Vector3, height: number): void {
+        if (!this.isInitialized || !this.ammo || !this.characterGhostObject) {
+            return;
+        }
+        
+        try {
+            // Update ghost transform
+            this.ghostTransform.setIdentity();
+            this.ghostTransform.setOrigin(new this.ammo.btVector3(
+                position.x, 
+                position.y + height * 0.5, // Center the capsule vertically
+                position.z
+            ));
+            
+            // Apply the new transform to the ghost object
+            this.characterGhostObject.setWorldTransform(this.ghostTransform);
+            
+            // Log every 100 frames for debugging
+            if (Math.random() < 0.01) {
+                console.log(`Ghost position updated to (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+            }
+        } catch (error) {
+            console.error('Failed to update ghost object position:', error);
+        }
+    }
+    
+    /**
+     * Check if the character ghost object is colliding with anything
+     * @returns Boolean indicating if collision occurred and details if requested
+     */
+    public checkGhostCollision(): boolean {
+        if (!this.isInitialized || !this.ammo || !this.characterGhostObject) {
+            return false;
+        }
+        
+        try {
+            // Force the physics world to update overlapping pairs
+            this.physicsWorld.updateAabbs();
+            this.physicsWorld.computeOverlappingPairs();
+            
+            // Get the number of overlapping objects
+            const numOverlaps = this.characterGhostObject.getNumOverlappingObjects();
+            
+            // Log collision check for debugging
+            console.log(`Checking ghost collisions, found ${numOverlaps} overlapping objects`);
+            
+            if (numOverlaps > 0) {
+                // Collect collision objects for debugging
+                for (let i = 0; i < numOverlaps; i++) {
+                    const overlappingObject = this.characterGhostObject.getOverlappingObject(i);
+                    
+                    // Skip floor objects (userIndex 999)
+                    const userIndex = overlappingObject.getUserIndex();
+                    if (userIndex === 999) {
+                        console.log(`Ignoring floor collision with user index ${userIndex}`);
+                        continue;
+                    }
+                    
+                    // Get collision flags
+                    const collisionFlags = overlappingObject.getCollisionFlags();
+                    const isStatic = (collisionFlags & 1) !== 0; // CF_STATIC_OBJECT
+                    const isKinematic = (collisionFlags & 2) !== 0; // CF_KINEMATIC_OBJECT
+                    
+                    // Find the corresponding mesh if possible
+                    const mesh = this.meshes.get(overlappingObject);
+                    const meshName = mesh ? mesh.name : "unknown";
+                    
+                    console.log(`Collision with object ${i}: ${meshName} (static: ${isStatic}, kinematic: ${isKinematic}, flags: ${collisionFlags})`);
+                    
+                    // We found a valid collision
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            console.error('Error checking ghost collision:', error);
+            return false;
         }
     }
     
@@ -81,6 +238,7 @@ export class PhysicsManager {
         position?: THREE.Vector3;
         mass?: number;
         restitution?: number;
+        isFloor?: boolean;
     }): void {
         if (!this.isInitialized || !this.physicsWorld || !this.ammo) {
             console.warn('Physics not initialized yet')
@@ -168,6 +326,11 @@ export class PhysicsManager {
             // Set restitution (bounciness) if provided
             if (options?.restitution !== undefined) {
                 rigidBody.setRestitution(options.restitution);
+            }
+            
+            // Mark floor objects with a special user index
+            if (options?.isFloor || mesh.name.toLowerCase().includes('floor')) {
+                rigidBody.setUserIndex(999); // Special index for floors
             }
             
             // Add to physics world
@@ -286,75 +449,30 @@ export class PhysicsManager {
     }
     
     /**
-     * Process collisions for character controller
+     * Process collisions for character controller using the ghost object
      */
     public checkCharacterCollision(
         position: THREE.Vector3, 
         radius: number = 0.5, 
         height: number = 2
     ): boolean {
-        if (!this.isInitialized || !this.physicsWorld || !this.ammo) {
-            return false
+        // Update the ghost object position if it exists
+        if (this.characterGhostObject) {
+            this.updateCharacterGhostPosition(position, height);
+            
+            // Always output position for debugging
+            console.log(`Checking collision at position (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+            
+            return this.checkGhostCollision();
         }
         
-        try {
-            // Use a simple ray-based approach instead of ghost object
-            // Check for collisions using ray casting from multiple directions
-            
-            // Create rays in 8 directions around the character (like a compass)
-            const directions = [
-                new THREE.Vector3(1, 0, 0),    // East
-                new THREE.Vector3(1, 0, 1).normalize(),  // Northeast
-                new THREE.Vector3(0, 0, 1),    // North
-                new THREE.Vector3(-1, 0, 1).normalize(), // Northwest
-                new THREE.Vector3(-1, 0, 0),   // West
-                new THREE.Vector3(-1, 0, -1).normalize(), // Southwest
-                new THREE.Vector3(0, 0, -1),   // South
-                new THREE.Vector3(1, 0, -1).normalize()  // Southeast
-            ];
-            
-            // Create a sphere for collision detection
-            const sphere = new THREE.Sphere(position.clone(), radius);
-            
-            // Check collisions with all static bodies in the scene
-            // Convert Map to Array for iteration to avoid TypeScript issues
-            const rigidBodyEntries = Array.from(this.rigidBodies.entries());
-            for (const [object, _] of rigidBodyEntries) {
-                if (object instanceof THREE.Mesh) {
-                    // Skip meshes that are too far away (optimization)
-                    if (object.position.distanceTo(position) > radius * 5) {
-                        continue;
-                    }
-                    
-                    // Compute bounding box if not already computed
-                    if (!object.geometry.boundingBox) {
-                        object.geometry.computeBoundingBox();
-                    }
-                    
-                    // Get the object's bounding box in world space
-                    const boundingBox = object.geometry.boundingBox.clone();
-                    object.updateMatrixWorld(true);
-                    boundingBox.applyMatrix4(object.matrixWorld);
-                    
-                    // Get the closest point on the box to the sphere center
-                    const closestPoint = new THREE.Vector3();
-                    boundingBox.clampPoint(position, closestPoint);
-                    
-                    // If the closest point is within the sphere radius, we have a collision
-                    const distance = position.distanceTo(closestPoint);
-                    if (distance < radius) {
-                        console.log(`Collision detected with object: ${object.name || 'unnamed'}`);
-                        return true;
-                    }
-                }
-            }
-            
-            // No collision detected
-            return false;
-        } catch (error) {
-            console.error('Error checking character collision:', error)
-            return false
-        }
+        // If no ghost object, create one first
+        console.log(`Creating new ghost object for collision detection`);
+        this.createCharacterGhostObject(position, radius, height);
+        
+        // Update position and check collision
+        this.updateCharacterGhostPosition(position, height);
+        return this.checkGhostCollision();
     }
     
     /**
@@ -365,26 +483,43 @@ export class PhysicsManager {
             return
         }
         
-        // Step simulation
-        this.physicsWorld.stepSimulation(deltaTime, 10)
-        
-        // Update dynamic objects
-        this.rigidBodies.forEach((body, mesh) => {
-            if (body.isActive()) {
-                const motionState = body.getMotionState()
-                
-                if (motionState) {
-                    motionState.getWorldTransform(this.tempTransform)
-                    
-                    const position = this.tempTransform.getOrigin()
-                    const rotation = this.tempTransform.getRotation()
-                    
-                    // Update Three.js mesh position and rotation
-                    mesh.position.set(position.x(), position.y(), position.z())
-                    mesh.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w())
-                }
+        try {
+            // Step simulation with fixed timestep (1/60 second) for stability
+            // Using a maximum of 10 substeps to catch up if frame rate drops
+            const fixedTimeStep = 1.0 / 60.0;
+            const maxSubSteps = 10;
+            
+            // Log physics step occasionally for debugging
+            if (Math.random() < 0.01) {
+                console.log(`Stepping physics simulation: deltaTime=${deltaTime}, fixedTimeStep=${fixedTimeStep}`);
             }
-        })
+            
+            this.physicsWorld.stepSimulation(deltaTime, maxSubSteps, fixedTimeStep);
+            
+            // Force collision world update after stepping
+            this.physicsWorld.updateAabbs();
+            this.physicsWorld.computeOverlappingPairs();
+            
+            // Update dynamic objects
+            this.rigidBodies.forEach((body, mesh) => {
+                if (body.isActive()) {
+                    const motionState = body.getMotionState()
+                    
+                    if (motionState) {
+                        motionState.getWorldTransform(this.tempTransform)
+                        
+                        const position = this.tempTransform.getOrigin()
+                        const rotation = this.tempTransform.getRotation()
+                        
+                        // Update Three.js mesh position and rotation
+                        mesh.position.set(position.x(), position.y(), position.z())
+                        mesh.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w())
+                    }
+                }
+            })
+        } catch (error) {
+            console.error('Error in physics update:', error);
+        }
     }
     
     /**
@@ -399,7 +534,18 @@ export class PhysicsManager {
      */
     public createCollisionObjects(meshes: THREE.Mesh[]): void {
         meshes.forEach(mesh => {
-            this.createStaticRigidBody(mesh)
+            const isFloor = mesh.name.toLowerCase().includes('floor');
+            this.createStaticRigidBody(mesh, { isFloor });
         })
+    }
+    
+    /**
+     * Mark a rigid body as a floor
+     */
+    public markAsFloor(rigidBody: any): void {
+        if (rigidBody) {
+            rigidBody.setUserIndex(999); // Special index for floors
+            console.log("Marked rigid body as floor");
+        }
     }
 } 

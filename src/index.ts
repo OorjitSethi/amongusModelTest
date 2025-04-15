@@ -181,6 +181,9 @@ mapManager.loadMap(mapPath, () => {
         const collisionMeshes = mapManager.getCollisionMeshes();
         console.log(`\n=== Debug: Creating rigid bodies for ${collisionMeshes.length} collision meshes ===`);
         
+        // Clear any existing visualization
+        clearCollisionVisualizations();
+        
         // Create rigid bodies for all collision meshes
         collisionMeshes.forEach((mesh, index) => {
             const isMapFloor = mesh.name.toLowerCase().includes('floor');
@@ -203,28 +206,14 @@ mapManager.loadMap(mapPath, () => {
                 {
                     position: offsetPosition,
                     mass: 0, // Static/immovable object
-                    restitution: 0.2 // Slight bounce
+                    restitution: 0.2, // Slight bounce
+                    isFloor: isMapFloor
                 }
             );
-            
-            // Add debug visualization
-            const geometry = mesh.geometry.clone();
-            const material = new THREE.MeshBasicMaterial({
-                color: 0xff0000,
-                wireframe: true,
-                opacity: 0.8,
-                transparent: true,
-                depthTest: false
-            });
-            
-            const wireframeMesh = new THREE.Mesh(geometry, material);
-            wireframeMesh.position.copy(offsetPosition);
-            wireframeMesh.quaternion.copy(mesh.quaternion);
-            wireframeMesh.scale.copy(mesh.scale);
-            
-            scene.add(wireframeMesh);
-            console.log(`Added debug visualization at offset position`);
         });
+        
+        // Create visualizations after all rigid bodies are created
+        visualizeCollisionMeshes();
         
         console.log(`=== End Debug ===\n`);
     }
@@ -267,11 +256,16 @@ setTimeout(() => {
         // Create rigid bodies for map collision meshes in the fallback map
         if (physicsManager.isPhysicsInitialized()) {
             const collisionMeshes = mapManager.getCollisionMeshes();
-            console.log(`Creating ${collisionMeshes.length} rigid bodies for fallback map collision meshes`);
+            console.log(`\n=== Debug: Creating ${collisionMeshes.length} rigid bodies for fallback map ===`);
+            
+            // Clear any existing visualization
+            clearCollisionVisualizations();
             
             // Create rigid bodies for all collision meshes
             collisionMeshes.forEach((mesh, index) => {
                 const isMapFloor = mesh.name.toLowerCase().includes('floor');
+                
+                console.log(`Processing fallback mesh ${index}: ${mesh.name} at position (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`);
                 
                 // Apply offset to match the visible wireframes (increased to 10 units east and 10 units south)
                 const offsetPosition = new THREE.Vector3(
@@ -280,20 +274,24 @@ setTimeout(() => {
                     mesh.position.z + 10
                 );
                 
+                console.log(`Fallback mesh ${index} offset position: (${offsetPosition.x}, ${offsetPosition.y}, ${offsetPosition.z})`);
+                
                 // Create a rigid body with correct mass (0 for immovable objects)
                 physicsManager.createStaticRigidBody(
                     mesh, 
                     {
                         position: offsetPosition,
                         mass: 0, // Static/immovable object
-                        restitution: 0.2 // Slight bounce
+                        restitution: 0.2, // Slight bounce
+                        isFloor: isMapFloor
                     }
                 );
-                
-                console.log(`Created rigid body for fallback collision mesh ${index}: ${mesh.name}`);
             });
             
-            console.log('Created physics collision objects for fallback map');
+            // Create visualizations after all rigid bodies are created
+            visualizeCollisionMeshes();
+            
+            console.log(`=== End Debug ===\n`);
         }
         
         // Initial player position
@@ -468,8 +466,25 @@ function addDebugObjects() {
 // Add debug visualizations
 addDebugObjects();
 
+// Collection to store visualization meshes
+const collisionVisualizations: THREE.Mesh[] = [];
+
+// Function to clear all collision visualizations
+function clearCollisionVisualizations() {
+    // Remove all existing visualization meshes from the scene
+    collisionVisualizations.forEach(mesh => {
+        scene.remove(mesh);
+    });
+    // Clear the array
+    collisionVisualizations.length = 0;
+    console.log("Cleared all collision visualizations");
+}
+
 // Add a helper function to visualize collision meshes (for debugging)
 function visualizeCollisionMeshes() {
+    // First clear any existing visualizations
+    clearCollisionVisualizations();
+    
     if (mapManager && mapManager.getCollisionMeshes().length > 0) {
         console.log(`\n=== Debug: Visualizing ${mapManager.getCollisionMeshes().length} collision meshes ===`);
         
@@ -499,12 +514,15 @@ function visualizeCollisionMeshes() {
             );
             console.log(`Mesh ${index} offset position: (${offsetPosition.x}, ${offsetPosition.y}, ${offsetPosition.z})`);
             
-            // Set the position with the offset
+            // Set the position with the offset and use original scale
             wireframeMesh.position.copy(offsetPosition);
             wireframeMesh.quaternion.copy(mesh.quaternion);
             wireframeMesh.scale.copy(mesh.scale);
             
             scene.add(wireframeMesh);
+            // Store the visualization mesh for later cleanup
+            collisionVisualizations.push(wireframeMesh);
+            
             console.log(`Added visualization for collision mesh ${index}`);
         });
         
@@ -522,5 +540,95 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
-// Uncomment this line to visualize collision meshes during development
-setTimeout(visualizeCollisionMeshes, 5000); // Wait for everything to load
+// Add a key handler to toggle debug mode
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'd') {
+        console.log("Triggering debug visualization");
+        showDebugVisualization();
+    }
+});
+
+// Function to create and show a debug sphere at a specific position
+function showDebugVisualization() {
+    // Create a debug sphere at the player position
+    const playerPosition = controls.getObject().position.clone();
+    playerPosition.y -= 1.65; // Adjust for eye height
+    
+    const sphereGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+    const sphereMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        wireframe: true,
+        depthTest: false
+    });
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+    sphere.position.copy(playerPosition);
+    scene.add(sphere);
+    
+    console.log(`Player position: (${playerPosition.x}, ${playerPosition.y}, ${playerPosition.z})`);
+    
+    // Visualize collision test rays from this position
+    const rayLength = 10;
+    const directions = [
+        new THREE.Vector3(1, 0, 0),    // East
+        new THREE.Vector3(1, 0, 1).normalize(),  // Northeast
+        new THREE.Vector3(0, 0, 1),    // North
+        new THREE.Vector3(-1, 0, 1).normalize(), // Northwest
+        new THREE.Vector3(-1, 0, 0),   // West
+        new THREE.Vector3(-1, 0, -1).normalize(), // Southwest
+        new THREE.Vector3(0, 0, -1),   // South
+        new THREE.Vector3(1, 0, -1).normalize()  // Southeast
+    ];
+    
+    directions.forEach((dir, index) => {
+        const rayEnd = playerPosition.clone().add(dir.clone().multiplyScalar(rayLength));
+        
+        // Create a line to visualize the ray
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+            playerPosition,
+            rayEnd
+        ]);
+        
+        const material = new THREE.LineBasicMaterial({ 
+            color: 0xffff00,
+            depthTest: false
+        });
+        
+        const line = new THREE.Line(geometry, material);
+        scene.add(line);
+    });
+    
+    // Test collision directly with physics manager
+    if (physicsManager && physicsManager.isPhysicsInitialized()) {
+        const hasCollision = physicsManager.checkCharacterCollision(playerPosition, 0.5, 1.8);
+        console.log(`Direct collision test result: ${hasCollision}`);
+    }
+    
+    console.log("Debug visualization added - press 'v' to see collision meshes");
+}
+
+// Add debug key to test collision at current position
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'c') {
+        console.log("Testing collision at current position");
+        testCollisionAtCurrentPosition();
+    }
+});
+
+// Function to test collision at the current position
+function testCollisionAtCurrentPosition() {
+    if (!characterControls || !physicsManager) {
+        console.log("Character or physics manager not initialized");
+        return;
+    }
+    
+    const position = characterControls.model.position.clone();
+    console.log(`Testing collision at current position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+    
+    const hasCollision = physicsManager.checkCharacterCollision(
+        position,
+        0.5, // radius
+        1.8  // height
+    );
+    
+    console.log(`Collision test result: ${hasCollision ? "COLLISION DETECTED" : "No collision"}`);
+}
