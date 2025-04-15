@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@types/three": "^0.131.1",
+    "ammo.js": "^0.0.10",
     "three": "^0.132.2"
   }
 }

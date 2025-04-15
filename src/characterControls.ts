@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
 import { A, D, DIRECTIONS, S, W } from './utils'
+import { MapManager } from './MapManager'
+import { PhysicsManager } from './PhysicsManager'
 
 export class CharacterControls {
     model: THREE.Group
@@ -8,6 +10,8 @@ export class CharacterControls {
     animationsMap: Map<string, THREE.AnimationAction> = new Map()
     camera: THREE.Camera
     controls: PointerLockControls
+    mapManager: MapManager | null = null
+    physicsManager: PhysicsManager | null = null
 
     // state
     toggleRun: boolean = true
@@ -21,9 +25,14 @@ export class CharacterControls {
     cameraHeight: number = 1.65 // Eye height for first person
     cameraForwardOffset: number = 0.25 // Forward offset to place camera at eyes
     
+    // Collision settings
+    collisionRadius: number = 0.5 // Character collision radius
+    characterHeight: number = 1.8 // Character height for collision capsule
+    
     // Movement vectors
     moveDirection = new THREE.Vector3()
     modelPosition = new THREE.Vector3()
+    lastValidPosition = new THREE.Vector3()
 
     constructor(
         model: THREE.Group,
@@ -31,7 +40,9 @@ export class CharacterControls {
         animationsMap: Map<string, THREE.AnimationAction>,
         camera: THREE.Camera,
         controls: PointerLockControls,
-        currentAction: string
+        currentAction: string,
+        mapManager?: MapManager,
+        physicsManager?: PhysicsManager
     ) {
         this.model = model
         this.mixer = mixer
@@ -39,6 +50,8 @@ export class CharacterControls {
         this.currentAction = currentAction
         this.camera = camera
         this.controls = controls
+        this.mapManager = mapManager || null
+        this.physicsManager = physicsManager || null
         
         // Make model visible (was hidden in previous implementation)
         this.model.traverse((object) => {
@@ -54,11 +67,29 @@ export class CharacterControls {
             }
         })
         
+        // Position model at the new map center (10, 0, 10)
+        this.model.position.set(10, 0, 10)
+        
         // Store initial position
         this.modelPosition.copy(this.model.position)
+        this.lastValidPosition.copy(this.model.position)
         
         // Initialize character position and camera
         this.updateControlsPosition()
+    }
+    
+    /**
+     * Set the map manager reference for collision detection
+     */
+    public setMapManager(mapManager: MapManager): void {
+        this.mapManager = mapManager
+    }
+    
+    /**
+     * Set the physics manager reference for collision detection
+     */
+    public setPhysicsManager(physicsManager: PhysicsManager): void {
+        this.physicsManager = physicsManager
     }
     
     private updateControlsPosition() {
@@ -84,6 +115,29 @@ export class CharacterControls {
 
     public switchRunToggle() {
         this.toggleRun = !this.toggleRun
+    }
+
+    /**
+     * Check if a position would result in a collision
+     */
+    private checkCollision(position: THREE.Vector3): boolean {
+        // Only use physics-based collision detection
+        if (this.physicsManager && this.physicsManager.isPhysicsInitialized()) {
+            const collision = this.physicsManager.checkCharacterCollision(
+                position, 
+                this.collisionRadius,
+                this.characterHeight
+            );
+            if (collision) {
+                console.log(`Physics collision detected at position (${position.x}, ${position.y}, ${position.z})`);
+                return true;
+            }
+        } else {
+            console.warn("Physics system not initialized - character will have no collisions");
+        }
+        
+        // No collision detected or physics not available
+        return false;
     }
 
     public update(delta: number, keysPressed: any) {
@@ -131,22 +185,65 @@ export class CharacterControls {
                 const speed = this.toggleRun ? this.runSpeed : this.walkSpeed
                 moveVector.multiplyScalar(speed * delta)
                 
-                // Move the controls/camera
+                // Store current position before moving
+                this.lastValidPosition.copy(this.model.position)
+                
+                // Get the controls object
                 const controlsObject = this.controls.getObject()
-                controlsObject.position.add(moveVector)
                 
-                // Move the model to follow the camera (at foot level)
-                const cameraDir = new THREE.Vector3()
-                this.camera.getWorldDirection(cameraDir)
-                cameraDir.y = 0
-                cameraDir.normalize()
+                // Calculate new position
+                const newControlsPosition = controlsObject.position.clone().add(moveVector)
                 
-                // Calculate and remove the forward offset to position model
-                const forwardOffset = cameraDir.clone().multiplyScalar(this.cameraForwardOffset)
+                // Calculate forward offset for character position
+                const forwardOffset = cameraDirection.clone().multiplyScalar(this.cameraForwardOffset)
                 
-                this.model.position.x = controlsObject.position.x - forwardOffset.x
-                this.model.position.z = controlsObject.position.z - forwardOffset.z
-                this.model.position.y = controlsObject.position.y - this.cameraHeight
+                // Calculate the new character position (removing offset)
+                const newModelPosition = new THREE.Vector3(
+                    newControlsPosition.x - forwardOffset.x,
+                    newControlsPosition.y - this.cameraHeight,
+                    newControlsPosition.z - forwardOffset.z
+                )
+                
+                // Check for collision
+                const wouldCollide = this.checkCollision(newModelPosition)
+                
+                if (!wouldCollide) {
+                    // No collision, move normally
+                    controlsObject.position.copy(newControlsPosition)
+                    
+                    // Update model position
+                    this.model.position.x = controlsObject.position.x - forwardOffset.x
+                    this.model.position.z = controlsObject.position.z - forwardOffset.z
+                    this.model.position.y = controlsObject.position.y - this.cameraHeight
+                } else {
+                    // Try to slide along walls by moving in separate X and Z directions
+                    
+                    // Try X movement only
+                    const newPositionX = new THREE.Vector3(
+                        newModelPosition.x,
+                        this.model.position.y,
+                        this.model.position.z
+                    )
+                    
+                    if (!this.checkCollision(newPositionX)) {
+                        // Can move in X direction
+                        this.model.position.x = newPositionX.x
+                        controlsObject.position.x = newPositionX.x + forwardOffset.x
+                    }
+                    
+                    // Try Z movement only
+                    const newPositionZ = new THREE.Vector3(
+                        this.model.position.x,
+                        this.model.position.y,
+                        newModelPosition.z
+                    )
+                    
+                    if (!this.checkCollision(newPositionZ)) {
+                        // Can move in Z direction
+                        this.model.position.z = newPositionZ.z
+                        controlsObject.position.z = newPositionZ.z + forwardOffset.z
+                    }
+                }
             }
             
             // Update animation

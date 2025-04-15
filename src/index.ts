@@ -3,14 +3,28 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { MapManager } from './MapManager';
+import { PhysicsManager } from './PhysicsManager';
 
 // SCENE
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
+// Initialize physics
+const physicsManager = new PhysicsManager();
+
+// Start loading physics engine
+(async function initPhysics() {
+    try {
+        await physicsManager.init();
+        console.log('Physics initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize physics:', error);
+    }
+})();
+
 // CAMERA
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 1.65, 0); // Position at eye height
+camera.position.set(10, 1.65, 10); // Position at map center (10, 0, 10) with eye height
 
 // RENDERER
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -20,6 +34,7 @@ renderer.shadowMap.enabled = true;
 
 // Create controls for first-person camera using Three.js PointerLockControls
 const controls = new PointerLockControls(camera, document.body);
+controls.getObject().position.set(10, 1.65, 10); // Position at map center with eye height
 scene.add(controls.getObject());
 
 // Input handling for player movement
@@ -143,6 +158,12 @@ function checkAllLoaded() {
             }, 1000);
         }
         console.log("All assets loaded!");
+        
+        // Create collision objects from map meshes once everything is loaded
+        if (physicsManager.isPhysicsInitialized() && mapManager.getCollisionMeshes().length > 0) {
+            physicsManager.createCollisionObjects(mapManager.getCollisionMeshes() as THREE.Mesh[]);
+            console.log('Created physics collision objects for map');
+        }
     }
 }
 
@@ -153,13 +174,80 @@ mapManager.loadMap(mapPath, () => {
     
     // Adjust map position and scale if needed
     mapManager.setScale(20); // Increased from 0.1 to 20 for better visibility
-    mapManager.setPosition(new THREE.Vector3(0, 0, 0));
+    mapManager.setPosition(new THREE.Vector3(10, 0, 10)); // Adjusted position to center the map
+    
+    // Create rigid bodies for map collision meshes
+    if (physicsManager.isPhysicsInitialized()) {
+        const collisionMeshes = mapManager.getCollisionMeshes();
+        console.log(`\n=== Debug: Creating rigid bodies for ${collisionMeshes.length} collision meshes ===`);
+        
+        // Create rigid bodies for all collision meshes
+        collisionMeshes.forEach((mesh, index) => {
+            const isMapFloor = mesh.name.toLowerCase().includes('floor');
+            
+            console.log(`\nProcessing mesh ${index}: ${mesh.name}`);
+            console.log(`Original position: (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`);
+            
+            // Apply offset to match the visible wireframes (increased to 10 units east and 10 units south)
+            const offsetPosition = new THREE.Vector3(
+                mesh.position.x + 10,
+                mesh.position.y,
+                mesh.position.z + 10
+            );
+            
+            console.log(`Offset position: (${offsetPosition.x}, ${offsetPosition.y}, ${offsetPosition.z})`);
+            
+            // Create a rigid body with correct mass (0 for immovable objects)
+            physicsManager.createStaticRigidBody(
+                mesh, 
+                {
+                    position: offsetPosition,
+                    mass: 0, // Static/immovable object
+                    restitution: 0.2 // Slight bounce
+                }
+            );
+            
+            // Add debug visualization
+            const geometry = mesh.geometry.clone();
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xff0000,
+                wireframe: true,
+                opacity: 0.8,
+                transparent: true,
+                depthTest: false
+            });
+            
+            const wireframeMesh = new THREE.Mesh(geometry, material);
+            wireframeMesh.position.copy(offsetPosition);
+            wireframeMesh.quaternion.copy(mesh.quaternion);
+            wireframeMesh.scale.copy(mesh.scale);
+            
+            scene.add(wireframeMesh);
+            console.log(`Added debug visualization at offset position`);
+        });
+        
+        console.log(`=== End Debug ===\n`);
+    }
     
     // Initial player position
     if (characterControls) {
-        // Position character at an appropriate start point on the map
-        const startPosition = new THREE.Vector3(0, 0, 0);
+        // Position character at the center of the map 
+        const startPosition = new THREE.Vector3(10, 0, 10);
         characterControls.model.position.copy(startPosition);
+        
+        // Force update the controls position to match the new character position
+        const controlsObject = controls.getObject();
+        controlsObject.position.set(10, 1.65, 10);
+        
+        // Connect map manager to character controls for collision detection
+        characterControls.setMapManager(mapManager);
+        console.log("Connected character controls to map manager for collision detection");
+        
+        // Connect physics manager to character controls if physics is initialized
+        if (physicsManager.isPhysicsInitialized()) {
+            characterControls.setPhysicsManager(physicsManager);
+            console.log("Connected character controls to physics manager for collision detection");
+        }
     }
 });
 
@@ -168,11 +256,65 @@ setTimeout(() => {
     if (!mapLoaded) {
         console.error("Map failed to load within timeout period");
         if (loadingStatus) {
-            loadingStatus.innerHTML = `
-                <p style="color: #ff5555;">ERROR: Could not load map file!</p>
-                <p>Make sure you have placed the skeld-map.glb file in the src/models/ directory.</p>
-                <p>Current path tried: ${mapPath}</p>
-            `;
+            loadingStatus.textContent = "Using fallback map...";
+        }
+        
+        // Generate a fallback map with collision objects
+        mapManager.generateFallbackMap();
+        mapLoaded = true;
+        checkAllLoaded();
+        
+        // Create rigid bodies for map collision meshes in the fallback map
+        if (physicsManager.isPhysicsInitialized()) {
+            const collisionMeshes = mapManager.getCollisionMeshes();
+            console.log(`Creating ${collisionMeshes.length} rigid bodies for fallback map collision meshes`);
+            
+            // Create rigid bodies for all collision meshes
+            collisionMeshes.forEach((mesh, index) => {
+                const isMapFloor = mesh.name.toLowerCase().includes('floor');
+                
+                // Apply offset to match the visible wireframes (increased to 10 units east and 10 units south)
+                const offsetPosition = new THREE.Vector3(
+                    mesh.position.x + 10,
+                    mesh.position.y,
+                    mesh.position.z + 10
+                );
+                
+                // Create a rigid body with correct mass (0 for immovable objects)
+                physicsManager.createStaticRigidBody(
+                    mesh, 
+                    {
+                        position: offsetPosition,
+                        mass: 0, // Static/immovable object
+                        restitution: 0.2 // Slight bounce
+                    }
+                );
+                
+                console.log(`Created rigid body for fallback collision mesh ${index}: ${mesh.name}`);
+            });
+            
+            console.log('Created physics collision objects for fallback map');
+        }
+        
+        // Initial player position
+        if (characterControls) {
+            // Position character at the center of the map 
+            const startPosition = new THREE.Vector3(10, 0, 10);
+            characterControls.model.position.copy(startPosition);
+            
+            // Force update the controls position to match the new character position
+            const controlsObject = controls.getObject();
+            controlsObject.position.set(10, 1.65, 10);
+            
+            // Connect map manager to character controls for collision detection
+            characterControls.setMapManager(mapManager);
+            console.log("Connected character controls to map manager for collision detection");
+            
+            // Connect physics manager to character controls if physics is initialized
+            if (physicsManager.isPhysicsInitialized()) {
+                characterControls.setPhysicsManager(physicsManager);
+                console.log("Connected character controls to physics manager for collision detection");
+            }
         }
     }
 }, 10000); // 10 second timeout
@@ -184,6 +326,9 @@ new GLTFLoader().load('models/Soldier.glb', function (gltf) {
     model.traverse(function (object: any) {
         if (object.isMesh) object.castShadow = true;
     });
+    
+    // Position model at map center before adding it to the scene
+    model.position.set(10, 0, 10);
     scene.add(model);
 
     const gltfAnimations: THREE.AnimationClip[] = gltf.animations;
@@ -193,10 +338,22 @@ new GLTFLoader().load('models/Soldier.glb', function (gltf) {
         animationsMap.set(a.name, mixer.clipAction(a));
     });
 
-    characterControls = new CharacterControls(model, mixer, animationsMap, camera, controls, 'Idle');
+    characterControls = new CharacterControls(model, mixer, animationsMap, camera, controls, 'Idle', mapManager, physicsManager);
     
     characterLoaded = true;
     checkAllLoaded();
+    
+    // If map is already loaded, set map manager for collision detection
+    if (mapLoaded) {
+        characterControls.setMapManager(mapManager);
+        console.log("Connected character controls to map manager for collision detection");
+        
+        // Connect physics manager to character controls if physics is initialized
+        if (physicsManager.isPhysicsInitialized()) {
+            characterControls.setPhysicsManager(physicsManager);
+            console.log("Connected character controls to physics manager for collision detection");
+        }
+    }
 });
 
 const clock = new THREE.Clock();
@@ -204,6 +361,11 @@ const clock = new THREE.Clock();
 // ANIMATE
 function animate() {
     const delta = clock.getDelta();
+    
+    // Update physics simulation
+    if (physicsManager.isPhysicsInitialized()) {
+        physicsManager.update(delta);
+    }
     
     if (characterControls) {
         characterControls.update(delta, keysPressed);
@@ -283,7 +445,7 @@ const floorGeometry = new THREE.PlaneGeometry(100, 100);
 const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
 const floor = new THREE.Mesh(floorGeometry, floorMaterial);
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = 0;
+floor.position.set(10, -0.01, 10); // Move floor slightly below (y = -0.01) to prevent z-fighting
 floor.receiveShadow = true;
 scene.add(floor);
 
@@ -294,12 +456,71 @@ console.log(`Current working directory structure:`);
 function addDebugObjects() {
     // Add coordinate axes
     const axesHelper = new THREE.AxesHelper(5);
+    axesHelper.position.set(10, 0.1, 10); // Position at map center, slightly above floor
     scene.add(axesHelper);
     
     // Add grid helper
-    const gridHelper = new THREE.GridHelper(10, 10);
+    const gridHelper = new THREE.GridHelper(20, 20);
+    gridHelper.position.set(10, 0.01, 10); // Position at map center
     scene.add(gridHelper);
 }
 
 // Add debug visualizations
 addDebugObjects();
+
+// Add a helper function to visualize collision meshes (for debugging)
+function visualizeCollisionMeshes() {
+    if (mapManager && mapManager.getCollisionMeshes().length > 0) {
+        console.log(`\n=== Debug: Visualizing ${mapManager.getCollisionMeshes().length} collision meshes ===`);
+        
+        const collisionMeshes = mapManager.getCollisionMeshes();
+        collisionMeshes.forEach((mesh, index) => {
+            // Create a wireframe representation of the collision mesh
+            const geometry = mesh.geometry.clone();
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xff0000,
+                wireframe: true,
+                opacity: 0.8,
+                transparent: true,
+                depthTest: false // Show through walls
+            });
+            
+            const wireframeMesh = new THREE.Mesh(geometry, material);
+            
+            // Get the original position
+            const originalPosition = mesh.position.clone();
+            console.log(`Mesh ${index} (${mesh.name}) original position: (${originalPosition.x}, ${originalPosition.y}, ${originalPosition.z})`);
+            
+            // Apply offset: increased to 10 units east and 10 units south
+            const offsetPosition = new THREE.Vector3(
+                originalPosition.x + 10,
+                originalPosition.y,
+                originalPosition.z + 10
+            );
+            console.log(`Mesh ${index} offset position: (${offsetPosition.x}, ${offsetPosition.y}, ${offsetPosition.z})`);
+            
+            // Set the position with the offset
+            wireframeMesh.position.copy(offsetPosition);
+            wireframeMesh.quaternion.copy(mesh.quaternion);
+            wireframeMesh.scale.copy(mesh.scale);
+            
+            scene.add(wireframeMesh);
+            console.log(`Added visualization for collision mesh ${index}`);
+        });
+        
+        console.log(`=== End Debug ===\n`);
+    } else {
+        console.log("No collision meshes found to visualize");
+    }
+}
+
+// Add a key handler to toggle collision visualization
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'v') {
+        console.log("Toggling collision visualization");
+        visualizeCollisionMeshes();
+    }
+});
+
+// Uncomment this line to visualize collision meshes during development
+setTimeout(visualizeCollisionMeshes, 5000); // Wait for everything to load
